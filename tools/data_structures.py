@@ -9,7 +9,7 @@ class settings():
         self.flood_tol     = 0.1
         self.lakes         = False
         self.square_kernel = False
-        self.blob_th       = 0.05
+        self.blob_tol       = 0.0005
         # Erosion Settings
         self.erosion_tol   = 0.1
         # Crop Settings
@@ -20,3 +20,6 @@ class settings():
         self.aliasing      = True
         self.fade_factor   = 1.5
         self.halo_pct      = 0.6
+
+        # Convolution Settings
+        self.kernel_size    = 3
