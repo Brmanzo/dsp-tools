@@ -10,6 +10,10 @@ Welcome to **DSP Tools**! This project is a collection of image processing utili
     - Erosion
     - Aliasing/feathering
     - Cropping
+- **Spatial Filtering**
+    - Blurring
+    - Sharpening
+    - Edge Detection
 - Extended functionality from `preprocessing.py` (imported from my [clash_star_tracker](https://github.com/Brmanzo/clash_star_tracker) project) to explore additional image processing applications.
 
 ### Goals
