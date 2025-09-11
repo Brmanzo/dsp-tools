@@ -167,12 +167,4 @@ def crop(s: settings, img: np.ndarray, mask: set) -> Tuple[np.ndarray, set]:
     
     return img[top:bottom+1, left:right+1], cropped_mask
 
-def convolution_blur(s: settings, img: np.ndarray) -> np.ndarray:
-    ''' Applies a convolutional blur to the image using a square kernel.'''
-    h, w = img.shape[:2]
-    blurred_img = img.copy()
-    for r in range(h):
-        for c in range(w):
-            neighbors = get_neighbors(s, img, (r, c), False)
-            blurred_img[r, c] = np.mean([img[n] for n in neighbors] + [img[r, c]], axis=0).astype(np.uint8)
-    return blurred_img
+# def convolution_blur(s: settings, img: np.ndarray) -> np.ndarray:

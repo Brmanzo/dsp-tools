@@ -41,10 +41,10 @@ def debug_img(img: np.ndarray, name: str, axis: str="row") -> None:
     debug_dir.mkdir(parents=True, exist_ok=True)
     debug_oscilloscope(img, name, debug_dir, axis)
 
-def output_img(img: np.ndarray, name: str) -> None:
+def output_img(img: np.ndarray, name: str, mode: str) -> None:
     ''' Outputs the processed image to the current working directory.'''
     output_path = os.path.join(os.getcwd(), name)
-    Image.fromarray(img, mode="RGBA").save(output_path)
+    Image.fromarray(img, mode=mode).save(output_path)
     print(f"Processed image saved to {output_path}")
 
 def output_gif(frames: list[Image.Image], name: str, duration: int) -> None:

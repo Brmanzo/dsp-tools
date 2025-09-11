@@ -40,15 +40,18 @@ def get_neighbors(s: settings, img: np.ndarray, pixel: tuple, blob: bool) -> lis
         if c > 0: neighbors.append((r, c - 1)) # West
         if s.square_kernel and r > 0 and c > 0: neighbors.append((r - 1, c - 1)) # Northwest
         if s.square_kernel and r > 0 and c < w - 1: neighbors.append((r - 1, c + 1)) # Northeast
-    else:
-        # All neighbors in the kernel, excluding the center pixel
-        for dr in range(-radius, radius + 1):
-            for dc in range(-radius, radius + 1):
-                if dr == 0 and dc == 0 or ((not s.square_kernel) and abs(dr) + abs(dc) > radius):
-                    continue
-                nr, nc = r + dr, c + dc
-                if 0 <= nr < h and 0 <= nc < w:
+        return neighbors
+    
+    # All neighbors in the kernel, including the center pixel
+    for dr in range(-radius, radius + 1):
+        for dc in range(-radius, radius + 1):
+            nr, nc = r + dr, c + dc
+            if 0 <= nr < h and 0 <= nc < w:
+                if s.square_kernel:
                     neighbors.append((nr, nc))
+                else:
+                    if abs(dr) + abs(dc) <= radius:
+                        neighbors.append((nr, nc))
     return neighbors
 
 def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple) -> list[set[Tuple[int, int]]]:
@@ -110,12 +113,62 @@ def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple)
 
     return sorted(list(blobs_by_root.values()), key=len, reverse=True)
 
-def convolution(s: settings, img: np.ndarray) -> np.ndarray:
+def convolution(s: settings, img: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     ''' Applies a convolutional blur to the image using a square kernel.'''
-    h, w = img.shape[:2]
-    blurred_img = img.copy()
+    is_color = img.ndim == 3
+    
+    if is_color:
+        h, w, ch = img.shape
+    else: # Grayscale
+        h, w = img.shape
+        ch = 1
+    radius = s.kernel_size // 2
+    # Pad image to avoid issues with edge
+    if is_color:
+        padded_img = np.pad(img, ((radius, radius), (radius, radius), (0,0)), mode='edge')
+    else:
+        padded_img = np.pad(img, ((radius, radius), (radius, radius)), mode='edge')
+
+    output_activation = np.zeros_like(img, dtype=np.float32)
+
     for r in range(h):
         for c in range(w):
-            neighbors = get_neighbors(s, img, (r, c), False)
-            blurred_img[r, c] = np.mean([img[n] for n in neighbors] + [img[r, c]], axis=0).astype(np.uint8)
-    return blurred_img
+            # Extract kernel-sized neighborhood from input activation via slicing
+            neighborhood = padded_img[r:r+s.kernel_size, c:c+s.kernel_size]
+            if is_color:
+                # Apply kernel to each channel
+                for i in range(ch):
+                     output_activation[r, c, i] = np.sum(neighborhood[:, :, i] * kernel)
+            else: # Grayscale
+                 output_activation[r, c] = np.sum(neighborhood * kernel)
+            
+    output_activation = np.clip(output_activation, 0, 255)
+    return output_activation.astype(np.uint8)
+
+def gaussian_function(x: np.ndarray, mean: float, std_dev: float) -> np.ndarray:
+    ''' Returns the value of the Gaussian function (PDF) at x. Accepts scalar or numpy array. '''
+    variance = std_dev ** 2
+    return (1 / (std_dev * np.sqrt(2 * np.pi))) * np.exp(-((x - mean)**2) / (2 * variance))
+
+def gaussian_derivative(x, mean, std_dev) -> np.ndarray:
+    """Calculates the first derivative of the Gaussian function."""
+    variance = std_dev ** 2
+    return -((x - mean) / variance) * gaussian_function(x, mean, std_dev)
+
+def sobel_gaussian_curve_sample(s: settings) -> tuple[np.ndarray, np.ndarray]:
+    ''' Returns the Sobel operator kernels for the given settings.'''
+    assert s.kernel_size >= 3 and s.kernel_size % 2 == 1, "kernel_size must be odd and >= 3"
+    # Should always be centered at 0
+    mean = s.kernel_size // 2
+    std_dev = (s.kernel_size - 1) / 6.0
+
+    x_values = np.arange(s.kernel_size)
+    # Gaussian curve for smoothing
+    kernel_1d_smooth = gaussian_function(x_values, mean, std_dev)
+    # Derivative of Gaussian for edge detection
+    kernel_1d_deriv = gaussian_derivative(x_values, mean, std_dev)
+    # Sobel Kernels are the matrix product of the two 1D kernels
+    kernel_x = np.outer(kernel_1d_smooth, kernel_1d_deriv)
+    kernel_y = np.outer(kernel_1d_deriv, kernel_1d_smooth)
+
+    return kernel_x, kernel_y
