@@ -6,7 +6,7 @@ from tools.methods import color_similar, get_neighbors, union_find
 from tools.data_structures import settings
 
 
-def blob_fill(s: settings, img: np.ndarray, bg_mask: set, bg_color: tuple, recolor: tuple) -> Tuple[np.ndarray, set]:
+def blob_fill(s: settings, img: np.ndarray, bg_mask: set, bg_color: tuple|int, recolor: tuple|int) -> Tuple[np.ndarray, set]:
     ''' Given an image and background mask, calculates the Disjointed Set Union of all blobs to recolor.'''
     h, w = img.shape[:2]
     img_size = h * w
@@ -36,19 +36,23 @@ def blob_fill(s: settings, img: np.ndarray, bg_mask: set, bg_color: tuple, recol
 
     return img, blob_mask
 
-def flood_fill(s: settings, img: np.ndarray, bg_color: tuple, seed: tuple, recolor: tuple) -> Tuple[np.ndarray, set]:
+def flood_fill(s: settings, img: np.ndarray, bg_color: tuple|int, seed: tuple, recolor: tuple|int, mode:str) -> Tuple[np.ndarray, set]:
     ''' Given a seed pixel, propagates outwards to find similar pixels within tolerance.
         Returns the recolored image as well as the set of recolored pixels as a mask. 
 
+        Supports both grayscale (single channel) and color images.
         Lakes specifies whether or not to search whole image for blobs.
         Square_kernel specifies whether to use 4-connectivity or 8-connectivity.'''
-    ocean, land, beach, map = set(), set(), set(), set()
+    ocean, land, beach = set(), set(), set()
     boat = seed
-    map.update((r, c) for r in range(img.shape[0]) for c in range(img.shape[1]))
-    
+    map = set((r, c) for r in range(img.shape[0]) for c in range(img.shape[1]))
+
     if boat[0] < 0 or boat[0] >= img.shape[0] or boat[1] < 0 or boat[1] >= img.shape[1]:
         raise ValueError("boat is off the map.")
     beach.add(boat)
+
+    # Determine if image is grayscale or color
+    is_grayscale = img.ndim == 2
 
     # While there is still a beach to explore
     while beach:
@@ -56,23 +60,35 @@ def flood_fill(s: settings, img: np.ndarray, bg_color: tuple, seed: tuple, recol
         # If explored pixel, skip
         if pixel in ocean or pixel in land:
             continue
-        # If unexplored pixel, and within threshold, mark as ocean (background)
-        if color_similar(tuple(img[pixel]), bg_color, s.flood_tol):
+        # Get pixel value
+        pixel_val = img[pixel] if is_grayscale else tuple(img[pixel])
+        # Ensure pixel_val is a tuple or float for color_similar
+        if isinstance(pixel_val, np.ndarray):
+            pixel_val = tuple(pixel_val.tolist())
+
+        if color_similar(pixel_val, bg_color, s.flood_tol, mode):
             neighbors = get_neighbors(s, img, pixel, False)
-            # Only add to ocean if at least one neighbor is also background
-            if any(color_similar(tuple(img[n]), bg_color, s.flood_tol) for n in neighbors):
+            found_bg_neighbor = False
+            for n in neighbors:
+                # Also correct the neighbor value handling
+                neighbor_val = img[n] if is_grayscale else tuple(img[n])
+                if isinstance(neighbor_val, np.ndarray):
+                    neighbor_val = tuple(neighbor_val.tolist())
+                if color_similar(neighbor_val, bg_color, s.flood_tol, mode):
+                    found_bg_neighbor = True
+                    break #i love gooning soooooo much heheheheh -Gooner Gonzalez    frrrrr n Nolan menzo
+            
+            if found_bg_neighbor:
                 ocean.add(pixel)
                 for neighbor in neighbors:
                     if neighbor not in ocean and neighbor not in land:
                         beach.add(neighbor)
-                map.difference_update(neighbors)
             else:
                 land.add(pixel)
-                map.discard(pixel)
-        # Otherwise, mark as land (foreground)
         else:
             land.add(pixel)
             map.discard(pixel)
+        # Otherwise, mark as land (foreground)
     # If searching for background within foreground (lakes), iterate over remaining map pixels
     if s.lakes:
         img, blob_mask = blob_fill(s, img, ocean, bg_color, recolor)
@@ -118,6 +134,8 @@ def erode(img: np.ndarray, mask: set, s: settings) -> set:
 def erosion(s: settings, img: np.ndarray, inset_mask: set, bg_mask: set, erosion_history: list[set]) -> Tuple[np.ndarray, set]:
     ''' Recursively erodes the perimeter of the foreground until the next inset is similar enough.
         Then reapplies aliasing to the eroded edges if specified. '''
+    is_color = img.ndim == 3
+    
     while True:
         bg_mask.update(inset_mask)
         next_inset_mask = erode(img, bg_mask, s)
@@ -128,8 +146,15 @@ def erosion(s: settings, img: np.ndarray, inset_mask: set, bg_mask: set, erosion
             # Return the image and the updated bg_mask when erosion is complete
             return img, bg_mask
 
-        inset_median_color      = np.median(np.array([img[p][:3] for p in inset_mask],      dtype=np.float32), axis=0)
-        next_inset_median_color = np.median(np.array([img[p][:3] for p in next_inset_mask], dtype=np.float32), axis=0)
+        if is_color:
+            inset_pixels = np.array([img[p][:3] for p in inset_mask], dtype=np.float32)
+            next_inset_pixels = np.array([img[p][:3] for p in next_inset_mask], dtype=np.float32)
+        else: # Grayscale
+            inset_pixels = np.array([img[p] for p in inset_mask], dtype=np.float32)
+            next_inset_pixels = np.array([img[p] for p in next_inset_mask], dtype=np.float32)
+
+        inset_median_color      = np.median(inset_pixels, axis=0)
+        next_inset_median_color = np.median(next_inset_pixels, axis=0)
 
         if s.print_debug: print(f"Inset median color: {inset_median_color}, Next inset median color: {next_inset_median_color}")
 

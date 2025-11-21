@@ -8,20 +8,23 @@ from tools.data_structures import settings
 
 def remove_bg(s: settings, img: np.ndarray) -> np.ndarray:
     ''' Given an RGBA image, removes the background by:
-        1. Sampling the border pixels to determine the background color.
-        2. Flood filling from the corner pixel to remove similar pixels.
-        3. Optionally cropping to the area of interest based on lightness channel.
-        4. Recursively eroding the edges until the next inset is similar enough.
-        5. Optionally reapplying aliasing to the eroded edges.
+    1. Sampling the border pixels to determine the background color.
+    2. Flood filling from the corner pixel to remove similar pixels.
+    3. Optionally cropping to the area of interest based on lightness channel.
+    4. Recursively eroding the edges until the next inset is similar enough.
+    5. Optionally reapplying aliasing to the eroded edges.
 
-        Lakes specifies whether or not to search whole image for color.
-        Square_kernel specifies whether to use 8-connectivity or 4-connectivity.
-        Crop specifies whether to auto-crop the image after flood fill.
-        Aliasing specifies whether to reapply aliasing after erosion.'''
-    transparent = (0, 0, 0, 0)
+    Lakes specifies whether or not to search whole image for color.
+    Square_kernel specifies whether to use 8-connectivity or 4-connectivity.
+    Crop specifies whether to auto-crop the image after flood fill.
+    Aliasing specifies whether to reapply aliasing after erosion.'''
+    transparent = 0 if img.ndim == 2 else (0, 0, 0, 0)
     # sample background color and flood from corner
     bg_color = sample_bg(img)
-    bg_removed, mask = flood_fill(s, img, bg_color, (0, 0), transparent)
+    # Ensure bg_color is int or tuple, not float
+    if isinstance(bg_color, float):
+        bg_color = int(bg_color)
+    bg_removed, mask = flood_fill(s, img, bg_color, (0, 0), transparent, mode="pct")
     # crop where the average max lightness diverges from the average
     if s.crop:
         img, mask = crop(s, bg_removed, mask)
@@ -61,15 +64,15 @@ def remove_bg_gif(argv: list, gif: Image.Image) -> None:
 
     output_gif(frames, "output.gif", gif.info.get('duration', 100))
 
-def blur_img(argv: list, img: np.ndarray):
+def blur_img(s: settings | None, argv: list, img: np.ndarray):
     ''' Applies a Gaussian blur to the image.'''
-    s = get_args(argv)
+    if s is None: s = get_args(argv)
     blurred_img = convolution(s, img, np.ones((s.kernel_size, s.kernel_size), dtype=np.float32) / (s.kernel_size ** 2))
     output_img(blurred_img, "output_blur.png", "RGBA")
 
-def sharpen_img(argv: list, img: np.ndarray):
+def sharpen_img(s: settings | None, argv: list, img: np.ndarray):
     ''' Applies a sharpening filter to the image.'''
-    s = get_args(argv)
+    if s is None: s = get_args(argv)
     # all elements -1 except center which is kernel_size^2
     sharpening_kernel = np.array(-1 * np.ones((s.kernel_size, s.kernel_size)), dtype=np.float32)
     sharpening_kernel[s.kernel_size // 2, s.kernel_size // 2] = (s.kernel_size ** 2)
@@ -77,9 +80,9 @@ def sharpen_img(argv: list, img: np.ndarray):
     sharpened_img = convolution(s, img, np.array(sharpening_kernel, dtype=np.float32))
     output_img(sharpened_img, "output_sharpen.png", "RGBA")
 
-def edge_detection(argv: list, img: np.ndarray):
+def edge_detection(s:settings|None, argv: list, img: np.ndarray) -> np.ndarray:
     ''' Applies an edge detection filter to the image.'''
-    s = get_args(argv)
+    if s is None: s = get_args(argv)
     sobel_x, sobel_y = sobel_gaussian_curve_sample(s)
 
     # Apply Sobel filters
@@ -101,8 +104,28 @@ def edge_detection(argv: list, img: np.ndarray):
     edge_img_final = edge_img_normalized.astype(np.uint8)
 
     output_img(edge_img_final, "output_edge.png", "L")
+    return edge_img_final
 
 valid_file_extensions = (".png", ".jpg", ".jpeg", ".webp")
+
+def preprocess_text(argv: list, img: np.ndarray):
+    ''' Preprocesses an image of text for better OCR results.'''
+    s = get_args(argv)
+    s.crop = False  # Disable cropping for text preprocessing
+    s.aliasing = False # Disable aliasing for text preprocessing
+    s.flood_tol = 10
+
+    white = 255
+
+    edge_img_final = edge_detection(s, argv, img)
+    bg_color = sample_bg(edge_img_final)  # Sample background to determine bg color
+    # Ensure bg_color is int or tuple, not float
+    if isinstance(bg_color, float):
+        bg_color = int(bg_color)
+    print(f"Sampled background color (lightness): {bg_color}")
+    edge_img_final, _ = flood_fill(s, edge_img_final, bg_color, seed=(0,0), recolor=255, mode="abs")  # Flood fill from corner to remove border noise
+
+    output_img(edge_img_final, "output_preprocessed.png", "L")
 
 def get_function(argv: list):
     '''Determines the function to execute based on input arguments.'''
@@ -113,13 +136,16 @@ def get_function(argv: list):
             remove_bg_gif(sys.argv, Image.open(argv[2]))
     elif "--blur" in argv:
         if argv[2].endswith(valid_file_extensions):
-            blur_img(sys.argv, np.array(Image.open(argv[2]).convert("RGBA")))
+            blur_img(None, sys.argv, np.array(Image.open(argv[2]).convert("RGBA")))
     elif "--sharpen" in argv:
         if argv[2].endswith(valid_file_extensions):
-            sharpen_img(sys.argv, np.array(Image.open(argv[2]).convert("RGBA")))
+            sharpen_img(None, sys.argv, np.array(Image.open(argv[2]).convert("RGBA")))
     elif "--edge" in argv:
         if argv[2].endswith(valid_file_extensions):
-            edge_detection(sys.argv, np.array(Image.open(argv[2]).convert("L")))
+            edge_detection(None, sys.argv, np.array(Image.open(argv[2]).convert("L")))
+    elif "--preprocess_text" in argv:
+        if argv[2].endswith(valid_file_extensions):
+            preprocess_text(sys.argv, np.array(Image.open(argv[2]).convert("L")))
     else:
         print("No valid function specified.")
         return

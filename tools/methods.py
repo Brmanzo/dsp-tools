@@ -3,8 +3,10 @@ import cv2
 from typing import Tuple
 from tools.data_structures import settings
 
-def sample_bg(img: np.ndarray) -> tuple:
-    ''' Sample the border pixels of the image and return the median color as the background color. '''
+def sample_bg(img: np.ndarray) -> tuple | float:
+    ''' Sample the border pixels of the image and return the median color as the background color. 
+        Works for both color and single-channel grayscale images.
+    '''
     h, w = img.shape[:2]
     # Collect edge coordinates directly into a numpy array
     top    = np.stack([(0, c) for c in range(w)])
@@ -15,20 +17,38 @@ def sample_bg(img: np.ndarray) -> tuple:
     
     # Sample colors at these coordinates
     colors = img[border_arr[:, 0], border_arr[:, 1]]
-    bg_color = tuple(np.median(colors, axis=0))
-    return bg_color
+    # If grayscale, colors is 1D; if color, colors is 2D
+    if img.ndim == 2: # Grayscale
+        # Return a single number, not a tuple
+        return float(np.median(colors))
+    else: # Color
+        return tuple(np.median(colors, axis=0))
 
-def color_similar(color1: tuple, color2: tuple, tol: float) -> bool:
-    ''' Returns true if color1 is within tol% of color2 for all channels.'''
-    return bool(np.all((np.array(color1) >= np.array(color2) * (1 - tol)) & (np.array(color1) <= np.array(color2) * (1 + tol))))
+def color_similar(color1: tuple|float, color2: tuple|float, tol: float, mode: str) -> bool:
+    ''' Returns true if color1 is within tolerance of color2. '''
+    arr1 = np.array(color1)
+    arr2 = np.array(color2)
+    
+    if mode == "pct":
+        return bool(np.all((arr1 >= arr2 * (1 - tol)) & (arr1 <= arr2 * (1 + tol))))
+    elif mode == "abs":
+        return bool(np.all(np.abs(arr1 - arr2) <= tol))
+    else:
+        raise ValueError("mode must be 'pct' or 'abs'")
 
 def get_neighbors(s: settings, img: np.ndarray, pixel: tuple, blob: bool) -> list[Tuple[int, int]]:
     ''' Given a pixel coordinate (r, c), return neighbors within a configurable kernel size.
         For blob=True, returns only north and west neighbors (for DSU efficiency).
         For blob=False, returns all neighbors in a square kernel of size s.kernel_size (odd integer >= 3).
+        Works for both color and single-channel grayscale images.
     '''
     r, c = pixel
-    h, w = img.shape[:2]
+    # Support both color and grayscale images
+    if img.ndim == 3:
+        h, w = img.shape[:2]
+    else:
+        h, w = img.shape
+
     neighbors = []
 
     assert s.kernel_size >= 3 and s.kernel_size % 2 == 1, "kernel_size must be odd and >= 3"
@@ -41,7 +61,7 @@ def get_neighbors(s: settings, img: np.ndarray, pixel: tuple, blob: bool) -> lis
         if s.square_kernel and r > 0 and c > 0: neighbors.append((r - 1, c - 1)) # Northwest
         if s.square_kernel and r > 0 and c < w - 1: neighbors.append((r - 1, c + 1)) # Northeast
         return neighbors
-    
+
     # All neighbors in the kernel, including the center pixel
     for dr in range(-radius, radius + 1):
         for dc in range(-radius, radius + 1):
@@ -54,12 +74,14 @@ def get_neighbors(s: settings, img: np.ndarray, pixel: tuple, blob: bool) -> lis
                         neighbors.append((nr, nc))
     return neighbors
 
-def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple) -> list[set[Tuple[int, int]]]:
+def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple|int) -> list[set[Tuple[int, int]]]:
     ''' Calculates the disjointed set union of all blobs in the image that are similar to color_to_find.'''
     h, w = img.shape[:2]
     blob_id = {}      # Maps a pixel (r,c) to its integer blob ID
     parent_blob = [0] # DSU parent list, indexed by blob ID
     next_blob_id = 1  # Next available blob ID
+
+    is_grayscale = img.ndim == 2
 
     # DSU Helper Functions
     def find(i: int) -> int:
@@ -80,10 +102,12 @@ def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple)
             pixel = (r, c)
             if pixel in bg_mask:
                 continue
-            if color_similar(tuple(img[pixel]), color_to_find, s.flood_tol):
+
+            pixel_tuple = (img[pixel],) if is_grayscale else tuple(img[pixel])
+            
+            if color_similar(pixel_tuple, color_to_find, s.flood_tol, mode="pct"):
                 # Get neighbor coordinates
                 neighbor_coords = get_neighbors(s, img, pixel, True)
-
                 # Build a clean set of neighbor root IDs
                 processed_neighbor_ids = set()
                 for neighbor in neighbor_coords:
@@ -111,7 +135,8 @@ def union_find(s: settings, img: np.ndarray, bg_mask: set, color_to_find: tuple)
         root = find(id)
         blobs_by_root.setdefault(root, set()).add(pixel)
 
-    return sorted(list(blobs_by_root.values()), key=len, reverse=True)
+    blobs = list(blobs_by_root.values())
+    return sorted(blobs, key=len, reverse=True)
 
 def convolution(s: settings, img: np.ndarray, kernel: np.ndarray) -> np.ndarray:
     ''' Applies a convolutional blur to the image using a square kernel.'''
